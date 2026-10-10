@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Local camera commissioning</title><link rel="stylesheet" href="/static/monitor.css"><script src="/static/monitor.js" defer></script></head>
+<body><main><h1>Local camera commissioning</h1><p class="banner">Local technician use only — not a child/family remote viewing service. No remote roles, recording, uploads, face recognition or gait risk estimation.</p>
+<section><label>Local bearer token <input id="token" type="password" autocomplete="off" spellcheck="false" maxlength="512"></label><button id="login">Connect</button><button id="logout" disabled>Disconnect monitor</button><p>Token stays in this page's memory only. Connecting does not open the camera.</p></section>
+<section><button id="start" disabled>Explicitly start camera</button><button id="stop" disabled>Stop and release camera</button><p id="message" role="status">Disconnected. No model is configured by default.</p><pre id="status">No authenticated status</pre></section>
+<figure><img id="frame" alt="Latest full camera frame" hidden><figcaption id="caption">No live frame</figcaption></figure>
+<p>Optional ONNX annotations are burned into the very same frame. OpenCV CPU inference is diagnostic only: not RKNN/NPU and not an improved trained model. Disconnecting or closing this page does not stop the board camera; use Stop first.</p></main></body></html>

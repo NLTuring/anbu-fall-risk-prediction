@@ -1,0 +1,171 @@
+EDGE LOCAL TECHNICIAN COMMISSIONING — Ubuntu 24 / RK3576
+
+Scope
+-----
+This directory is independent of web/, which remains a mock prototype.
+Nothing has been SSH-deployed or started on your board. No model is included or
+ downloaded. No recording, media upload, face recognition or gait-risk estimate.
+This is NOT a multiuser/child remote authorization service. One shared local
+technician bearer credential controls one camera. Anyone holding it can start,
+view and stop that camera. Do not expose this service publicly.
+
+Manual board setup (normal non-root user)
+---------------------------------------
+Copy edge/ to a directory you own on the board, excluding the local Windows
+.venv/, __pycache__/, and any .env. Keep your own trusted models separately.
+Example board location: /home/YOUR_USER/fall-edge/edge
+
+  cd /home/YOUR_USER/fall-edge/edge
+  bash diagnose.sh
+  bash install.sh
+  bash run.sh
+
+install.sh only creates the project-local .venv and installs Python wheels.
+Package installation requires package-index access; no weights are downloaded.
+It generates .env ONLY if absent, with umask 077, mode 600 and a random token.
+An existing .env is preserved, not repaired or overwritten. No token is printed.
+Use a trusted local editor to read the EDGE_TOKEN value from .env and paste it
+into the monitor. Do not put tokens in URLs, chat, screenshots or shell history.
+.env is shell-sourced trusted configuration: do not paste untrusted shell code.
+.gitignore excludes .env, .venv, Python caches and ONNX files.
+
+If Python/venv is missing, an operator may separately choose to run:
+  sudo apt install python3 python3-venv
+Optional read-only camera enumeration tools:
+  sudo apt install v4l-utils
+These OS commands are never executed by our scripts. Python 3.10+ is required;
+Ubuntu 24's Python 3.12 is suitable. Dependencies use bounded compatible ranges,
+not a fully reproducible lockfile. ARM64 wheel availability must be verified on
+the board. The installer refuses source builds and will fail clearly if a
+compatible wheel is unavailable. It does not install system Python packages.
+
+Camera node permission/driver issues must be evaluated by the operator. Scripts
+do not alter groups, udev, device permissions, firewalls or system services.
+Do not work around permissions by running the application as root.
+
+Viewing locally or through an SSH tunnel
+---------------------------------------
+run.sh accepts no arguments and fixes one worker at 127.0.0.1:8765. It disables
+access logging and proxy-header trust. Do not replace this with a public bind,
+multiple workers, --reload, a public reverse proxy or permissive CORS.
+On a browser running on the board: open http://127.0.0.1:8765/
+On your workstation, manually establish a tunnel (not run by this project):
+  ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:8765:127.0.0.1:8765 YOUR_USER@BOARD_IP
+Then open http://127.0.0.1:8765/ on your workstation. The tunnel requires existing
+SSH access; this implementation does not install or configure SSH. If local port
+8765 is occupied, use local port 8766 in -L and open that corresponding URL.
+
+Paste token, click Connect, then explicitly click Start. Connecting, GET requests,
+service startup, and static page loading NEVER open the camera. Stop releases it
+and immediately invalidates the in-memory JPEG. Stop before disconnecting or
+closing the page: leaving the page does not imply camera stop. Ctrl-C requests
+worker shutdown/release. No automatic restart of capture after a read failure;
+inspect status and explicitly Start again.
+
+Camera and model behavior
+-------------------------
+Default .env values:
+  EDGE_CAMERA=/dev/video0      only /dev/video followed by digits
+  EDGE_WIDTH=640             integer 160..1920
+  EDGE_HEIGHT=480            integer 120..1080
+  EDGE_FPS=10                integer 1..30 (application capture rate ceiling)
+  EDGE_FRESHNESS_MS=2000      integer 250..5000
+  POSE_ONNX=                 empty means NO MODEL
+  POSE_KEYPOINT_PERCENT=50   integer 1..100
+  EDGE_TOKEN=...             >=32 non-whitespace ASCII characters
+
+Missing/weak token or invalid config prevents application startup. Compare is
+constant time. Config changes require service restart. Use a generated random
+token, not merely a long predictable password. Token rotation requires updating
+.env, restarting the service, and reconnecting monitors.
+
+Start accepts optional JSON {"width":640,"height":480,"fps":10}, same bounds.
+Device drivers may ignore resolution/FPS/buffer requests; status includes actual
+frame dimensions and requested settings, NOT a claim of measured hardware FPS.
+The application processes at most the requested FPS; inference can lower it.
+Start while already active is idempotent; Stop then Start to change settings.
+Only one capture thread owns VideoCapture/open/read/release and optional inference.
+Latest JPEG only is retained, not a queue/archive; snapshots are no-store. Freshness
+is measured by monotonic time at completion of camera read, including inference
+latency, not a hardware exposure timestamp. Driver-internal buffering cannot be
+fully controlled. Camera read/encoding failures clear the previous frame.
+Stalled reads or slow inference cause expired frames to return 503 rather than
+serve stale JPEGs forever. The monitor clears unavailable frames and polls
+sequentially, at most five cycles/sec, with eight-second request timeouts.
+
+Some V4L2 drivers or native inference calls can block without an interruptible
+Python timeout. Stop clears the JPEG immediately, requests release and waits up
+to five seconds; if still blocked, reports stopping/error and refuses a second
+worker. Actual release happens in the worker's finally block once native code
+returns. Shutdown follows the same bounded wait; process exit closes descriptors.
+If blocked permanently, restart the process and investigate driver/model. This
+thread-based diagnostic is not a hard-real-time guarantee of device release.
+
+Optional REAL ONNX diagnostic
+-----------------------------
+No default pose model and no synthetic skeleton. Set POSE_ONNX in .env to an
+absolute path of an existing trusted local ONNX file (quote shell paths with
+spaces). Supported contract only: standard single-person-class COCO17 YOLOv8
+pose export, float RGB input [1,3,640,640], raw single output [1,56,8400], channel
+order cx,cy,w,h,person-score, then 17*(x,y,confidence), coordinates in 640-square
+letterbox pixels and probabilities already activated. No end-to-end NMS,
+transposed, normalized-coordinate, other input-size, or multi-output export.
+A dummy forward checks supported output shape, finiteness and score ranges.
+Shape alone cannot establish model semantics: the operator must supply the
+correct trusted export. Loading happens only after explicit Start.
+
+Implementation uses OpenCV DNN CPU, not RKNN/NPU, not an improved/custom-trained
+model. It letterboxes, restores/clamps coordinates, applies person-score 0.35
+and IoU NMS 0.45, and draws only confident keypoints/limbs outside padding.
+Annotations are computed on and burned into the SAME JPEG camera frame.
+Model failures show MODEL ERROR while keeping unannotated camera images available.
+Status distinguishes no_model, loading, ready, no_people, people_detected and
+model_error. No people means zero model detections, not proof a room is empty.
+CPU inference can be slow on RK3576; no performance or accuracy claims are made.
+
+API (all /api endpoints require Authorization: Bearer TOKEN)
+----------------------------------------------------------
+  GET  /api/status        camera/model state, errors, frame age, dimensions
+  POST /api/camera/start  explicit start; optional bounded JSON options
+  POST /api/camera/stop   stop/release request and clear cached JPEG
+  GET  /api/frame         image/jpeg; 503 if absent, stopped, failed or expired
+Frame headers: X-Frame-Sequence, X-Pose-State, X-People-Count (same JPEG metadata).
+All responses including API errors use Cache-Control: no-store. Static monitor
+is public; no camera/status API is public. No CORS middleware. Browser mutations
+with a mismatched/null Origin or cross-site fetch metadata receive 403; same-origin
+Authorization fetches work. Non-browser clients may omit Origin but require token.
+No token is accepted in query strings and no token is deliberately logged.
+Monitor keeps token only in JS memory, uses same-origin fetch, revokes object URLs,
+and never stores credentials in cookies/localStorage/sessionStorage. CSP blocks
+framing and external scripts. Protect the board account and browser session too.
+
+Optional USER systemd example (never installed automatically)
+------------------------------------------------------------
+Edit paths in systemd/edge-monitor.service to match your board copy. An operator
+may then manually copy it to ~/.config/systemd/user/edge-monitor.service and run:
+  systemctl --user daemon-reload
+  systemctl --user start edge-monitor.service
+Optional explicit enable: systemctl --user enable edge-monitor.service
+Stop: systemctl --user stop edge-monitor.service
+Logs: journalctl --user -u edge-monitor.service
+No linger changes are made; a user service normally follows user-session lifetime.
+It still starts with the camera CLOSED, including after a service restart.
+
+Hardware-free tests
+-------------------
+From edge/ in its local venv:
+  .venv/bin/python -m pip install 'httpx>=0.27,<0.29'
+  .venv/bin/python -m unittest discover -s tests -v
+httpx is test-only, not a runtime dependency. On Windows substitute
+.venv/Scripts/python.exe. Tests mock camera/model dependencies and need no hardware
+or weights. They cover auth/fail-closed startup/origin checks, defaults, bounds,
+start/stop/shutdown, V4L2 selection, failed/stale frames, real JPEG encoding,
+model error/no-person distinction, pose letterbox restoration, clamping, NMS,
+confidence drawing and unsupported output shapes.
+
+Local validation: Python 3.11.5 on Windows; 23 unittest tests passed, including
+blocked-read stop and same-frame metadata checks. pip check, node --check for the
+monitor JS, and bash -n for all three scripts passed. Actual Ubuntu24 ARM64
+installation, USB camera behavior,
+ONNX model accuracy/performance, NPU runtime and SSH/systemd execution are not
+hardware-tested here. No remote connection/deployment or weight download occurred.

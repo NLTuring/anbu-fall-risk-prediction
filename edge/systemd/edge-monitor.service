@@ -1,0 +1,17 @@
+# Optional USER unit EXAMPLE. Edit paths before manually installing.
+[Unit]
+Description=Loopback-only local camera commissioning
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/fall-edge/edge
+ExecStart=/bin/bash "%h/fall-edge/edge/run.sh"
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
